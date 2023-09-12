@@ -21,6 +21,7 @@ from time import sleep
 from tqdm import tqdm
 from typing import List, Dict, Any
 from uuid import uuid4
+from termcolor import colored
 from airoboros.embeddings import calculate_embeddings
 from airoboros.exceptions import (
     RateLimitError,
@@ -64,6 +65,7 @@ class SelfInstructor:
             logger.remove()
             logger.add(sys.stdout, level="INFO")
         self.used_tokens = 0
+        self.total_price = 0
         self.config_path = config_path
         self.load_config()
         self.instructor_counts = defaultdict(int)
@@ -179,6 +181,37 @@ class SelfInstructor:
                     ]
                 )
             )
+
+    def openai_api_calculate_cost(self, usage, model="gpt-3.5-turbo-16k"):
+        pricing = {
+            'gpt-3.5-turbo': {
+                'prompt': 0.0015,
+                'completion': 0.002,
+            },
+            'gpt-3.5-turbo-16k': {
+                'prompt': 0.003,
+                'completion': 0.004,
+            },
+            'gpt-4': {
+                'prompt': 0.03,
+                'completion': 0.06,
+            },
+            'gpt-4-32k': {
+                'prompt': 0.06,
+                'completion': 0.12,
+            }
+        }
+
+        try:
+            model_pricing = pricing[model]
+        except KeyError:
+            raise ValueError("Invalid model specified")
+
+        prompt_cost = usage['prompt_tokens'] * model_pricing['prompt'] / 1000
+        completion_cost = usage['completion_tokens'] * model_pricing['completion'] / 1000
+
+        total_cost = prompt_cost + completion_cost
+        return total_cost
 
     def validate_model(self, model):
         """Ensure the specified model is available."""
@@ -377,6 +410,9 @@ class SelfInstructor:
         ):
             return None
         text = response["choices"][0]["message"]["content"]
+        price = self.openai_api_calculate_cost(response["usage"], self.model)
+        self.total_price += price
+        print('\033[1m' + colored(f"Total Price = ${self.total_price:.4f}", "red") + '\033[0m')
 
         if filter_response:
             for banned in self.response_filters:
@@ -784,6 +820,8 @@ class SelfInstructor:
         from airoboros.instructors.trivia import generate as trivia_generator
         from airoboros.instructors.wordgame import generate as wordgame_generator
         from airoboros.instructors.writing import generate as writing_generator
+        from airoboros.instructors.agieval import generate as agieval_generator
+        from airoboros.instructors.bbh_hard import generate as bbh_hard_generator
 
         method_map = {
             "agent": agent_generator,
@@ -808,6 +846,8 @@ class SelfInstructor:
             "trivia": trivia_generator,
             "wordgame": wordgame_generator,
             "writing": writing_generator,
+            "agieval": agieval_generator,
+            "bbh_hard": bbh_hard_generator,
         }
 
         await self.initialize_topics()
@@ -877,7 +917,7 @@ def generate_instructions(args):
     parser = argparse.ArgumentParser()
     for arg, kwargs in SelfInstructor.CLI_ARGS.items():
         parser.add_argument(arg, **kwargs)
-    asyncio.run(SelfInstructor(**vars(parser.parse_args(args))).run())
+    asyncio.run(SelfInstructor(**vars(args)).run())
 
 
 def generate_topics(args):
@@ -885,7 +925,7 @@ def generate_topics(args):
     parser = argparse.ArgumentParser()
     for arg, kwargs in SelfInstructor.CLI_ARGS.items():
         parser.add_argument(arg, **kwargs)
-    instructor = SelfInstructor(**vars(parser.parse_args(args)))
+    instructor = SelfInstructor(**vars(args))
     asyncio.run(instructor.initialize_topics())
 
 
